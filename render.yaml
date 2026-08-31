@@ -19,7 +19,7 @@ services:
       - key: DATA_DIR
         value: /var/data
       - key: NODE_VERSION
-        value: "22.11.0"
+        value: "22.22.2"
       # Optional: create the owner account on first boot instead of using /setup.
       # - key: OWNER_EMAIL
       #   value: you@prestigecleaning.us
