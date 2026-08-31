@@ -328,6 +328,40 @@ function multipart(fields, files) {
   ok('signed-out visitor cannot download materials', r.status === 302);
 
   /* ------------------------------------------- the code goes on the image */
+  /* --------------------------------------------- upgrading a live database */
+  section('Upgrading a database from the previous release');
+  {
+    // Exactly what production looked like before this release: seeded_assets
+    // was created outside the migration list, so the row that records it is
+    // missing. Re-running migrations must not blow up on it.
+    const { DatabaseSync } = require('node:sqlite');
+    const older = new DatabaseSync(':memory:');
+    const MIG = require('../src/db').MIGRATIONS;
+    older.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+    for (let i = 0; i < MIG.length; i++) {
+      if (/seeded_assets|code_history/.test(MIG[i])) continue;   // the new ones
+      older.exec(MIG[i]);
+      older.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+    }
+    older.exec('CREATE TABLE seeded_assets (filename TEXT PRIMARY KEY, seeded_at TEXT NOT NULL)');
+
+    let upgradeError = null;
+    try {
+      const done = new Set(older.prepare('SELECT n FROM _migrations').all().map(r => r.n));
+      for (let i = 0; i < MIG.length; i++) {
+        if (done.has(i)) continue;
+        older.exec(MIG[i]);
+        older.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+      }
+    } catch (e) { upgradeError = e; }
+
+    ok('a database carrying seeded_assets from the old release still upgrades',
+       upgradeError === null, upgradeError && upgradeError.message);
+    ok('the upgrade adds the table the new release needs',
+       !!older.prepare("SELECT name FROM sqlite_master WHERE name='code_history'").get());
+    older.close();
+  }
+
   section('Graphics carry the partner\u2019s own code');
   const CREATIVES = require('../src/creatives');
   const bundled = q.all("SELECT filename FROM assets WHERE filename LIKE '0%'").map(a => a.filename);

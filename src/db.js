@@ -120,12 +120,14 @@ const MIGRATIONS = [
   `CREATE INDEX idx_leads_status  ON leads(status);`,
   `CREATE INDEX idx_leads_created ON leads(created_at DESC);`,
   `CREATE INDEX idx_sessions_user ON sessions(user_id);`,
-  `CREATE TABLE seeded_assets (
+  /* IF NOT EXISTS on both: an earlier release created seeded_assets outside
+     the migration list, so a database from that release already has it. */
+  `CREATE TABLE IF NOT EXISTS seeded_assets (
      filename  TEXT PRIMARY KEY,
      seeded_at TEXT NOT NULL
    );`,
 
-  `CREATE TABLE code_history (
+  `CREATE TABLE IF NOT EXISTS code_history (
      code       TEXT PRIMARY KEY COLLATE NOCASE,
      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
      retired_at TEXT NOT NULL
@@ -249,4 +251,4 @@ function seedAssets(newId) {
   }
 }
 
-module.exports = { open, handle, q, tx, migrate, getSettings, setSetting, seedServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };
+module.exports = { open, handle, q, tx, migrate, MIGRATIONS, getSettings, setSetting, seedServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };
