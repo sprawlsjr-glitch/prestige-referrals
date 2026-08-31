@@ -5,3 +5,6 @@ data/
 *.db-shm
 .DS_Store
 .env
+
+# local copies of the graphics — the six the app ships with live in bundled/
+marketing/

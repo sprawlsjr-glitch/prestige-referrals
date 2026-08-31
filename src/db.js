@@ -200,4 +200,45 @@ function seedServices(newId) {
   });
 }
 
-module.exports = { open, handle, q, tx, migrate, getSettings, setSetting, seedServices, SETTING_DEFAULTS, DATA_DIR };
+/* ---------------------------------------------------------------------
+   Marketing creatives that ship with the app. Listed explicitly rather
+   than scanning the folder, so a stray file next to them never ends up
+   in front of partners. Seeded once, by filename — an owner can delete
+   any of them from Materials and it stays deleted. */
+const BUNDLED_ASSETS = [
+  ['01-post-driveway.png',       'Interior before & after — feed post'],
+  ['02-post-packages.png',       'The price menu — feed post'],
+  ['03-post-addons.png',         'Add-ons, $80 each — feed post'],
+  ['04-post-customers.png',      'Real customers — feed post'],
+  ['05-story-headlight.png',     'Headlight restoration — story'],
+  ['06-story-how-it-works.png',  'How it works — story'],
+];
+
+const ASSET_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp', '.gif': 'image/gif',
+  '.pdf': 'application/pdf', '.mp4': 'video/mp4',
+};
+
+function seedAssets(newId) {
+  // A row remembers what has been offered, so deleting in Materials sticks.
+  db.exec('CREATE TABLE IF NOT EXISTS seeded_assets (filename TEXT PRIMARY KEY, seeded_at TEXT NOT NULL)');
+  const dir = path.join(__dirname, '..', 'bundled');
+  let sort = q.get('SELECT COALESCE(MAX(sort),0) m FROM assets').m;
+  for (const [name, title] of BUNDLED_ASSETS) {
+    if (q.get('SELECT filename FROM seeded_assets WHERE filename = ?', name)) continue;
+    const ct = ASSET_TYPES[path.extname(name).toLowerCase()];
+    if (!ct) continue;
+    let data;
+    try { data = fs.readFileSync(path.join(dir, name)); } catch (e) { continue; }
+    if (!data.length) continue;
+    sort += 1;
+    q.run(`INSERT INTO assets (id,filename,title,kind,content_type,bytes,data,sort,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)`,
+      newId('as'), name, title, ct.startsWith('image/') ? 'image' : ct === 'application/pdf' ? 'pdf' : 'video',
+      ct, data.length, data, sort, new Date().toISOString());
+    q.run('INSERT INTO seeded_assets (filename,seeded_at) VALUES (?,?)', name, new Date().toISOString());
+  }
+}
+
+module.exports = { open, handle, q, tx, migrate, getSettings, setSetting, seedServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };

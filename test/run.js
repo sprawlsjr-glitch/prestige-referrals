@@ -269,7 +269,7 @@ function multipart(fields, files) {
   let mp = multipart({ title: 'Instagram post' }, [{ field: 'files', filename: 'post.png', type: 'image/png', data: png }]);
   r = await owner.post('/owner/assets', mp.body, { headers: { 'Content-Type': mp.ctype } });
   ok('owner can upload a graphic', r.status === 302 && /ok=uploaded/.test(r.headers.location), r.headers.location);
-  const asset = q.get('SELECT * FROM assets LIMIT 1');
+  const asset = q.get("SELECT * FROM assets WHERE filename = 'post.png'");
   ok('asset stored with its bytes intact', asset && asset.bytes === png.length && Buffer.from(asset.data).equals(png));
 
   mp = multipart({}, [{ field: 'files', filename: 'x.exe', type: 'application/x-msdownload', data: Buffer.from('MZ') }]);
