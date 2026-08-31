@@ -1,0 +1,13 @@
+{
+  "name": "prestige-referrals",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Referral program for Prestige Mobile Cleaning — partner portal, lead attribution and commission tracking.",
+  "type": "commonjs",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "start": "node --no-warnings src/server.js",
+    "test": "node --no-warnings test/run.js"
+  },
+  "dependencies": {}
+}

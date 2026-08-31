@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: prestige-referrals
+    runtime: node
+    plan: starter                # $7/month — a disk requires a paid plan
+    region: ohio                 # closest US region to Atlanta
+    branch: main
+    buildCommand: "echo 'no build step — zero dependencies'"
+    startCommand: "node --no-warnings src/server.js"
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: prestige-data
+      mountPath: /var/data       # the SQLite file lives here and survives deploys
+      sizeGB: 1                  # $0.25/month
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: NODE_VERSION
+        value: "22.11.0"
+      # Optional: create the owner account on first boot instead of using /setup.
+      # - key: OWNER_EMAIL
+      #   value: you@prestigecleaning.us
+      # - key: OWNER_PASSWORD
+      #   sync: false
