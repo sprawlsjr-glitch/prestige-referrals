@@ -362,6 +362,41 @@ function multipart(fields, files) {
     older.close();
   }
 
+  /* ------------------------------------ a redesigned graphic replaces itself */
+  section('Shipped graphics update themselves');
+  {
+    const A2 = require('../src/auth');
+    const before = q.get("SELECT id, bytes, data FROM assets WHERE filename = '01-post-driveway.png'");
+    ok('a shipped graphic is in Materials', !!before);
+
+    // Pretend the file on disk changed since the last boot.
+    q.run("UPDATE seeded_assets SET sha = 'stale' WHERE filename = '01-post-driveway.png'");
+    q.run("UPDATE assets SET data = ?, bytes = ? WHERE id = ?", Buffer.from('old bytes'), 9, before.id);
+    require('../src/db').seedAssets(A2.newId);
+    const after = q.get("SELECT id, bytes FROM assets WHERE filename = '01-post-driveway.png'");
+    ok('a redesigned file replaces the copy partners see', after.bytes === before.bytes, String(after.bytes));
+    ok('and it keeps the same asset, not a duplicate', after.id === before.id);
+    ok('no second copy appeared',
+       q.get("SELECT COUNT(*) n FROM assets WHERE filename = '01-post-driveway.png'").n === 1);
+
+    // If the owner threw one away, a redesign must not resurrect it.
+    const victim = q.get("SELECT id FROM assets WHERE filename = '02-post-packages.png'");
+    q.run('DELETE FROM assets WHERE id = ?', victim.id);
+    q.run("UPDATE seeded_assets SET sha = 'stale' WHERE filename = '02-post-packages.png'");
+    require('../src/db').seedAssets(A2.newId);
+    ok('a graphic the owner deleted stays deleted',
+       !q.get("SELECT id FROM assets WHERE filename = '02-post-packages.png'"));
+    require('../src/db').seedAssets(A2.newId);
+    ok('and it does not come back on the next boot either',
+       !q.get("SELECT id FROM assets WHERE filename = '02-post-packages.png'"));
+
+    // put it back so the checks further down still see the full set
+    q.run("DELETE FROM seeded_assets WHERE filename = '02-post-packages.png'");
+    require('../src/db').seedAssets(A2.newId);
+    ok('clearing the record lets a deleted graphic be offered again',
+       !!q.get("SELECT id FROM assets WHERE filename = '02-post-packages.png'"));
+  }
+
   section('Graphics carry the partner\u2019s own code');
   const CREATIVES = require('../src/creatives');
   const bundled = q.all("SELECT filename FROM assets WHERE filename LIKE '0%'").map(a => a.filename);

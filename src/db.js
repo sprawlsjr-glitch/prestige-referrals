@@ -2,6 +2,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 
 // DATA_DIR is the Render persistent disk mount. Falls back to ./data for local runs.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
@@ -127,6 +128,8 @@ const MIGRATIONS = [
      seeded_at TEXT NOT NULL
    );`,
 
+  `ALTER TABLE seeded_assets ADD COLUMN sha TEXT NOT NULL DEFAULT '';`,
+
   `CREATE TABLE IF NOT EXISTS code_history (
      code       TEXT PRIMARY KEY COLLATE NOCASE,
      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -232,22 +235,42 @@ const ASSET_TYPES = {
 };
 
 function seedAssets(newId) {
-  // seeded_assets remembers what has been offered, so deleting in Materials sticks.
+  // seeded_assets remembers what has been offered and what it looked like:
+  // an owner's delete sticks, but a redesigned file replaces the old one.
   const dir = path.join(__dirname, '..', 'bundled');
+  const now = new Date().toISOString();
   let sort = q.get('SELECT COALESCE(MAX(sort),0) m FROM assets').m;
+
   for (const [name, title] of BUNDLED_ASSETS) {
-    if (q.get('SELECT filename FROM seeded_assets WHERE filename = ?', name)) continue;
     const ct = ASSET_TYPES[path.extname(name).toLowerCase()];
     if (!ct) continue;
     let data;
     try { data = fs.readFileSync(path.join(dir, name)); } catch (e) { continue; }
     if (!data.length) continue;
-    sort += 1;
-    q.run(`INSERT INTO assets (id,filename,title,kind,content_type,bytes,data,sort,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)`,
-      newId('as'), name, title, ct.startsWith('image/') ? 'image' : ct === 'application/pdf' ? 'pdf' : 'video',
-      ct, data.length, data, sort, new Date().toISOString());
-    q.run('INSERT INTO seeded_assets (filename,seeded_at) VALUES (?,?)', name, new Date().toISOString());
+
+    const sha = crypto.createHash('sha256').update(data).digest('hex');
+    const seen = q.get('SELECT filename, sha FROM seeded_assets WHERE filename = ?', name);
+    const kind = ct.startsWith('image/') ? 'image' : ct === 'application/pdf' ? 'pdf' : 'video';
+
+    if (!seen) {
+      sort += 1;
+      q.run(`INSERT INTO assets (id,filename,title,kind,content_type,bytes,data,sort,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?)`,
+        newId('as'), name, title, kind, ct, data.length, data, sort, now);
+      q.run('INSERT INTO seeded_assets (filename,seeded_at,sha) VALUES (?,?,?)', name, now, sha);
+      continue;
+    }
+
+    if (seen.sha === sha) continue;              // unchanged since last boot
+
+    // Changed. Refresh it in place — but only if the owner still has it.
+    // If they deleted it, leave it deleted and just remember the new hash.
+    const live = q.get('SELECT id FROM assets WHERE filename = ?', name);
+    if (live) {
+      q.run('UPDATE assets SET title = ?, kind = ?, content_type = ?, bytes = ?, data = ? WHERE id = ?',
+        title, kind, ct, data.length, data, live.id);
+    }
+    q.run('UPDATE seeded_assets SET sha = ?, seeded_at = ? WHERE filename = ?', sha, now, name);
   }
 }
 
