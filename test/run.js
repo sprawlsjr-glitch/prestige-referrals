@@ -239,6 +239,49 @@ function multipart(fields, files) {
   ok('partner-submitted lead is attributed to them', priya.partner_id === partnerId);
   ok('best time folded into notes', /Best time: Mornings/.test(priya.notes));
 
+  /* ------------------------------------------------------ renaming a code */
+  section('Partners can rename their code');
+  const oldCode = P.code;
+
+  r = await partner.post('/partner/code', { code: 'ab' });
+  ok('too-short code refused', /codeerr=/.test(r.headers.location || ''));
+  r = await partner.post('/partner/code', { code: '12345' });
+  ok('digits-only code refused', /codeerr=/.test(r.headers.location || ''));
+  r = await partner.post('/partner/code', { code: 'ADMIN' });
+  ok('reserved code refused', /codeerr=/.test(r.headers.location || ''));
+
+  r = await partner.post('/partner/code', { code: '  mel-detail 22 ' });
+  ok('code renamed', r.status === 302 && /ok=code/.test(r.headers.location), r.headers.location);
+  const renamed = q.get('SELECT * FROM users WHERE id = ?', partnerId);
+  ok('punctuation and spaces stripped, uppercased', renamed.code === 'MELDETAIL22', renamed.code);
+
+  r = await anon.get('/r/' + renamed.code);
+  ok('new link works', r.status === 200 && r.body.includes('value="' + renamed.code + '"'));
+  r = await anon.get('/r/' + oldCode);
+  ok('old link still works', r.status === 200);
+
+  const before = q.get('SELECT COUNT(*) n FROM leads WHERE partner_id = ?', partnerId).n;
+  r = await anon.post('/book', { code: oldCode, customer: 'Late Flyer', phone: '770-555-0177' });
+  const late = q.get('SELECT * FROM leads WHERE customer = ?', 'Late Flyer');
+  ok('a booking on the retired code still pays the same partner', late && late.partner_id === partnerId);
+  ok('earlier leads stayed attached through the rename',
+     q.get('SELECT COUNT(*) n FROM leads WHERE partner_id = ?', partnerId).n === before + 1);
+
+  r = await owner.post('/owner/partners/' + partnerId, { name: renamed.name, email: renamed.email, code: 'MELDETAIL22' });
+  ok('owner saving the same code is a no-op', /ok=saved/.test(r.headers.location || ''));
+
+  const second = q.get("SELECT id FROM users WHERE role='partner' AND id <> ?", partnerId);
+  if (second) {
+    r = await owner.post('/owner/partners/' + second.id, { code: oldCode, name: 'x', email: 'second@partner.test' });
+    ok('a retired code cannot be handed to someone else', /codeerr=/.test(r.headers.location || ''));
+  }
+
+  r = await partner.post('/partner/code', { code: oldCode });
+  ok('a partner can take their own old code back', /ok=code/.test(r.headers.location || ''));
+  ok('and it is theirs again', q.get('SELECT code FROM users WHERE id = ?', partnerId).code === oldCode);
+  ok('the code they just left keeps working',
+     !!q.get('SELECT code FROM code_history WHERE code = ? AND user_id = ?', 'MELDETAIL22', partnerId));
+
   /* ------------------------------------------------------------- security */
   section('Access control');
   r = await partner.get('/owner');
@@ -283,6 +326,25 @@ function multipart(fields, files) {
   ok('download sends an attachment header', /attachment/.test(r.headers['content-disposition'] || ''));
   r = await anon.get('/asset/' + asset.id);
   ok('signed-out visitor cannot download materials', r.status === 302);
+
+  /* ------------------------------------------- the code goes on the image */
+  section('Graphics carry the partner\u2019s own code');
+  const CREATIVES = require('../src/creatives');
+  const bundled = q.all("SELECT filename FROM assets WHERE filename LIKE '0%'").map(a => a.filename);
+  ok('every graphic that ships with the app has a code plate',
+     bundled.length === 6 && bundled.every(f => !!CREATIVES.plateFor(f)), bundled.join(','));
+  ok('a plate sits inside the image it belongs to', Object.values(CREATIVES.PLATES).every(c =>
+     c.plate.x >= 0 && c.plate.y >= 0 && c.plate.x + c.plate.w <= c.w && c.plate.y + c.plate.h <= c.h));
+
+  r = await partner.get('/partner/assets');
+  const myCode = q.get('SELECT code FROM users WHERE id = ?', partnerId).code;
+  ok('each shipped graphic is marked for stamping', (r.body.match(/<div class="asset" data-plate=/g) || []).length === 6,
+     String((r.body.match(/data-plate/g) || []).length));
+  ok('the stamping runs in the partner\u2019s browser, not on the server', r.body.includes('getContext'));
+  ok('the download is named with their code', r.body.includes('-' + myCode + '.png'));
+  ok('the page tells them whose code is on it', r.body.includes(myCode));
+  ok('an uploaded file with no plate keeps a plain download',
+     /Download<\/a>/.test(r.body) && r.body.includes('Download with my code'));
 
   /* ------------------------------------------------------------ passwords */
   section('Passwords');

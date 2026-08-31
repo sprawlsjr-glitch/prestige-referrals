@@ -88,7 +88,8 @@ get('/book', ctx => {
 // Per-partner booking link. This is what makes attribution airtight:
 // the code is filled in before the customer touches anything.
 get('/r/:code', (ctx, params) => {
-  const p = q.get("SELECT * FROM users WHERE code = ? AND role = 'partner' AND status = 'active'", params.code);
+  const p = C.partnerByCode(params.code);
+  if (p && p.status === 'paused') return H.redirect(ctx.res, '/book');
   if (!p) return H.redirect(ctx.res, '/book');
   H.html(ctx.res, Pub.bookForm(ctx.settings, C.servicesList(), { code: p.code, partnerName: p.name }));
 });
@@ -110,7 +111,7 @@ post('/book', async ctx => {
 
   let partner = null;
   if (codeIn) {
-    partner = q.get("SELECT * FROM users WHERE code = ? AND role = 'partner'", codeIn);
+    partner = C.partnerByCode(codeIn);
     if (!partner) return back('We don\u2019t recognize the code \u201c' + codeIn + '\u201d. Check the spelling, or leave it blank and continue.');
     if (partner.status === 'paused') partner = null;
   }

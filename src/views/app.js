@@ -217,6 +217,9 @@ function ownerPartnerDetail(ctx, p, d, tempPassword) {
     <div class="grid2">
       <label class="f"><span>Email</span><input type="email" name="email" value="${esc(p.email)}"></label>
       <label class="f"><span>Phone</span><input type="tel" name="phone" value="${esc(p.phone || '')}"></label></div>
+    <label class="f"><span>Referral code</span><input type="text" name="code" value="${esc(p.code || '')}" maxlength="20"
+      autocapitalize="characters" autocomplete="off" spellcheck="false" style="text-transform:uppercase;letter-spacing:.06em"></label>
+    ${d.oldCodes && d.oldCodes.length ? `<p class="tiny muted" style="margin:-6px 0 12px">Old codes that still reach them: <span class="mono">${d.oldCodes.map(esc).join(' · ')}</span></p>` : ''}
     <label class="f"><span>Pay them at</span><input type="text" name="pay_handle" value="${esc(p.pay_handle || '')}" placeholder="$cashtag or @venmo-username"></label>
     <div class="grid2">
       <label class="f"><span>Custom rate</span><select name="rate_mode">
@@ -399,6 +402,23 @@ function partnerHome(ctx, d) {
   <div class="codebox"><div style="flex:1">
     <div class="eyebrow">Your code</div><div class="codeval">${esc(p.code)}</div></div></div>
   <div class="card pad" style="margin-top:10px">
+    <details${d.oldCodes.length ? '' : ''}>
+      <summary class="small" style="cursor:pointer;font-weight:600">Change my code</summary>
+      <form method="post" action="/partner/code" style="margin-top:10px">
+        <label class="f"><span>Make it yours</span>
+          <input type="text" name="code" value="${esc(p.code)}" maxlength="20"
+                 autocapitalize="characters" autocomplete="off" spellcheck="false"
+                 style="text-transform:uppercase;letter-spacing:.06em"></label>
+        <p class="tiny muted" style="margin:0 0 10px">Letters and numbers, 3–20 characters. Pick something people
+        can hear over the phone and spell back to you.</p>
+        <button class="btn pri">Save my code</button>
+      </form>
+      <p class="tiny muted" style="margin:12px 0 0">Changing it never affects leads you already sent, and
+      your old code keeps working — anything you already posted or handed out still pays you.</p>
+    </details>${d.oldCodes.length ? `
+    <p class="tiny muted" style="margin:10px 0 0">Still working: <span class="mono">${d.oldCodes.map(esc).join(' · ')}</span></p>` : ''}
+  </div>
+  <div class="card pad" style="margin-top:10px">
     <div class="eyebrow" style="margin-bottom:5px">Your booking link</div>
     <div class="mono small" style="word-break:break-all;margin-bottom:10px">${esc(link)}</div>
     <p class="small muted" style="margin:0">Anyone who books through this link is tied to you automatically — the code is already filled in.</p>
@@ -513,17 +533,94 @@ function partnerEarnings(ctx, d) {
   return frame(ctx, '/partner/earnings', h);
 }
 
-function partnerAssets(ctx, list) {
+function partnerAssets(ctx, list, plates) {
+  const code = String(ctx.user.code || '');
+  const personal = list.filter(a => plates[a.filename]).length;
   const body = `<div class="sec" style="margin-top:4px"><h2>Marketing materials</h2></div>
-  <p class="small muted" style="margin-top:-6px">Download these and post them. Your code is ${esc(ctx.user.code)} — put it in the caption.</p>
-  ${list.length ? `<div class="assetgrid" style="margin-top:14px">${list.map(a => `<div class="asset">
-      ${String(a.content_type).startsWith('image/') ? `<img src="/asset/${esc(a.id)}" alt="${esc(a.title || a.filename)}" loading="lazy">` : ''}
+  <p class="small muted" style="margin-top:-6px">${personal
+      ? 'Your code <b>' + esc(code) + '</b> is printed onto these when you download them — nobody else\u2019s.'
+      : 'Download these and post them. Your code is <b>' + esc(code) + '</b> — put it in the caption.'}</p>
+  ${list.length ? `<div class="assetgrid" style="margin-top:14px">${list.map(a => {
+    const img = String(a.content_type).startsWith('image/');
+    const spec = plates[a.filename];
+    return `<div class="asset"${spec ? ` data-plate="${esc(JSON.stringify(spec.plate))}"` : ''}>
+      ${img ? `<img src="/asset/${esc(a.id)}" alt="${esc(a.title || a.filename)}"${spec ? ' crossorigin="anonymous"' : ' loading="lazy"'}>` : ''}
       <div class="meta"><div class="nm">${esc(a.title || a.filename)}</div>
         <div class="sz">${esc(bytes(a.bytes))}</div>
-        <a class="btn sm full" href="/asset/${esc(a.id)}?dl=1">Download</a></div></div>`).join('')}</div>`
-    : `<div class="card" style="margin-top:14px"><div class="empty">Nothing here yet — the shop hasn't uploaded materials.</div></div>`}`;
+        <a class="btn sm full${spec ? ' pri stamp' : ''}" href="/asset/${esc(a.id)}?dl=1"
+           ${spec ? `download="${esc(String(a.filename).replace(/\.png$/i, ''))}-${esc(code)}.png"` : ''}>${
+          spec ? 'Download with my code' : 'Download'}</a></div></div>`;
+  }).join('')}</div>`
+    : `<div class="card" style="margin-top:14px"><div class="empty">Nothing here yet — the shop hasn\u2019t uploaded materials.</div></div>`}
+  ${personal ? `<p class="tiny muted" style="margin-top:12px">If a download ever comes through without the code on it,
+  press and hold the picture above and save it from there — it is already stamped.</p>` : ''}
+  <script>${STAMP_JS.replace('__CODE__', JSON.stringify(code))}<\/script>`;
   return frame(ctx, '/partner/assets', body);
 }
+
+/* Paints the partner's code into the blank plate, in their own browser, and
+   hands the stamped PNG to the download. No image library on the server. */
+const STAMP_JS = `
+(function(){
+  var CODE = __CODE__;
+  var FAMILY = '"Arial Narrow","Helvetica Neue Condensed Bold","Liberation Sans Narrow",Arial,sans-serif';
+
+  function stamp(img, plate){
+    var c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    var g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    var k = c.width / 1080;
+    var x = plate.x * k, y = plate.y * k, w = plate.w * k, h = plate.h * k;
+    try { g.letterSpacing = '0.03em'; } catch (e) {}
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#ffffff';
+    var size = h;
+    while (size > 8) {
+      g.font = '700 ' + size + 'px ' + FAMILY;
+      if (g.measureText(CODE).width <= w) break;
+      size -= 1;
+    }
+    g.font = '700 ' + size + 'px ' + FAMILY;
+    g.fillText(CODE, x + w / 2, y + h / 2);
+    return c;
+  }
+
+  function ready(el, fn){
+    var img = el.querySelector('img');
+    if (!img) return;
+    if (img.complete && img.naturalWidth) return fn(img);
+    img.addEventListener('load', function(){ fn(img); }, { once: true });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.asset[data-plate]'), function(el){
+    var plate;
+    try { plate = JSON.parse(el.getAttribute('data-plate')); } catch (e) { return; }
+    ready(el, function(img){
+      var canvas;
+      try { canvas = stamp(img, plate); } catch (e) { return; }
+      // Show the stamped version, so what they see is what they get.
+      try {
+        img.src = canvas.toDataURL('image/png');
+      } catch (e) {}
+      var link = el.querySelector('a.stamp');
+      if (!link || !canvas.toBlob) return;
+      link.addEventListener('click', function(ev){
+        if (link.dataset.armed === '1') { link.dataset.armed = ''; return; }
+        ev.preventDefault();
+        canvas.toBlob(function(blob){
+          if (!blob) { link.dataset.armed = '1'; link.click(); return; }
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url; a.download = link.getAttribute('download') || 'prestige.png';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+        }, 'image/png');
+      });
+    });
+  });
+})();
+`;
+
 
 module.exports = {
   ownerOverview, ownerLeads, ownerLeadDetail, ownerNewLead,

@@ -24,7 +24,9 @@ function flashFrom(ctx) {
     type: ['bad', 'Only images, PDFs and MP4s can be uploaded.'],
   };
   const m = MSG[ok || e];
-  return m ? require('../views/layout').flash(m[0], m[1]) : '';
+  if (m) return require('../views/layout').flash(m[0], m[1]);
+  const bad = ctx.url.searchParams.get('codeerr');
+  return bad ? require('../views/layout').flash('bad', bad) : '';
 }
 
 /* ------------------------------------------------------------- overview */
@@ -173,6 +175,7 @@ get('/owner/partners/:id', (ctx, p) => {
   V_send(ctx, V.ownerPartnerDetail(ctx, u, {
     leads: q.get('SELECT COUNT(*) n FROM leads WHERE partner_id = ?', u.id).n,
     owed: M.owedFor(u.id), paid: M.paidFor(u.id),
+    oldCodes: C.retiredCodes(u.id),
   }, ctx.url.searchParams.get('pw') || ''));
 }, OWNER);
 
@@ -183,6 +186,10 @@ post('/owner/partners/:id', async (ctx, p) => {
   const email = H.clean(fields.email, 200).toLowerCase() || u.email;
   const clash = q.get('SELECT id FROM users WHERE email = ? AND id <> ?', email, u.id);
   if (clash) return H.redirect(ctx.res, '/owner/partners/' + u.id + '?e=email');
+  if (fields.code != null && C.normalizeCode(fields.code) !== C.normalizeCode(u.code)) {
+    const r = C.setPartnerCode(u, fields.code);
+    if (r.error) return H.redirect(ctx.res, '/owner/partners/' + u.id + '?codeerr=' + encodeURIComponent(r.error));
+  }
   const mode = ['flat', 'percent'].includes(fields.rate_mode) ? fields.rate_mode : null;
   const val = mode ? H.num(fields.rate_value) : null;
   q.run(`UPDATE users SET name=?, email=?, phone=?, pay_handle=?, rate_mode=?, rate_value=?, status=? WHERE id=?`,

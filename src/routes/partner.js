@@ -7,6 +7,7 @@ const C = require('../context');
 const M = require('../money');
 const V = require('../views/app');
 const Layout = require('../views/layout');
+const Creatives = require('../creatives');
 
 const PARTNER = 'partner';
 
@@ -18,9 +19,12 @@ function flashFrom(ctx) {
     sent: ['ok', "Sent to the shop — they'll reach out to the customer."],
     wrong: ['bad', 'That current password is not right.'],
     short: ['bad', 'Password needs at least 8 characters.'],
+    code: ['ok', 'Code updated. Your old code still works.'],
   };
   const m = MSG[ok || e];
-  return m ? Layout.flash(m[0], m[1]) : '';
+  if (m) return Layout.flash(m[0], m[1]);
+  const bad = ctx.url.searchParams.get('codeerr');
+  return bad ? Layout.flash('bad', bad) : '';
 }
 
 function myLeads(userId) {
@@ -42,6 +46,7 @@ get('/partner', ctx => {
     openCount: open.length,
     settledCount: leads.filter(l => l.status === 'settled').length,
     recent: leads.slice(0, 4),
+    oldCodes: C.retiredCodes(me.id),
   }));
 }, PARTNER);
 
@@ -87,6 +92,13 @@ get('/partner/earnings', ctx => {
   }));
 }, PARTNER);
 
+post('/partner/code', async ctx => {
+  const { fields } = await H.parseForm(ctx.req);
+  const r = C.setPartnerCode(ctx.user, fields.code);
+  if (r.error) return H.redirect(ctx.res, '/partner?codeerr=' + encodeURIComponent(r.error));
+  H.redirect(ctx.res, '/partner?ok=code');
+}, PARTNER);
+
 post('/partner/account', async ctx => {
   const { fields } = await H.parseForm(ctx.req);
   q.run('UPDATE users SET pay_handle = ? WHERE id = ?', H.clean(fields.pay_handle, 80), ctx.user.id);
@@ -95,5 +107,6 @@ post('/partner/account', async ctx => {
 
 get('/partner/assets', ctx => {
   H.html(ctx.res, V.partnerAssets(ctx,
-    q.all('SELECT id,filename,title,kind,content_type,bytes FROM assets ORDER BY sort, created_at DESC')));
+    q.all('SELECT id,filename,title,kind,content_type,bytes FROM assets ORDER BY sort, created_at DESC'),
+    Creatives.PLATES));
 }, PARTNER);

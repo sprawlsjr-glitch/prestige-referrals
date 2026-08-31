@@ -41,4 +41,74 @@ function setCookieFor(userId) {
   return A.sessionCookie(sess.id, sess.expires, SECURE);
 }
 
-module.exports = { PORT, SECURE, settingsFor, servicesList, partnerOf, attachPartners, ownerExists, setCookieFor };
+/* ------------------------------------------------------- referral codes
+   A partner can rename their own code. Old codes keep working forever:
+   they move to code_history, so links already texted out and graphics
+   already printed never go dead. Attribution is by user id, so renaming
+   never touches a lead that already exists. */
+
+const RESERVED = new Set([
+  'ADMIN', 'OWNER', 'PARTNER', 'PRESTIGE', 'BOOK', 'BOOKING', 'LOGIN',
+  'LOGOUT', 'SETUP', 'ASSET', 'ASSETS', 'SETTINGS', 'NULL', 'UNDEFINED',
+]);
+
+const CODE_MIN = 3;
+const CODE_MAX = 20;
+
+/** Letters and digits only, uppercased — keeps the /r/CODE link clean. */
+function normalizeCode(raw) {
+  return String(raw == null ? '' : raw).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_MAX);
+}
+
+/** Any partner reachable by this code — current or retired. */
+function partnerByCode(raw) {
+  const code = normalizeCode(raw);
+  if (!code) return null;
+  const now = q.get("SELECT * FROM users WHERE code = ? AND role = 'partner'", code);
+  if (now) return now;
+  const old = q.get('SELECT user_id FROM code_history WHERE code = ?', code);
+  return old ? q.get("SELECT * FROM users WHERE id = ? AND role = 'partner'", old.user_id) : null;
+}
+
+/** { code } when it can be used by userId, { error } with a human reason. */
+function checkCode(raw, userId) {
+  const code = normalizeCode(raw);
+  if (code.length < CODE_MIN) return { error: 'Codes need at least ' + CODE_MIN + ' letters or numbers.' };
+  if (/^[0-9]+$/.test(code)) return { error: 'Use at least one letter so it is not mistaken for a phone number.' };
+  if (RESERVED.has(code)) return { error: '“' + code + '” is reserved. Pick another one.' };
+  if (q.get('SELECT id FROM users WHERE code = ? AND id <> ?', code, userId)) {
+    return { error: 'Another partner already uses “' + code + '”.' };
+  }
+  if (q.get('SELECT code FROM code_history WHERE code = ? AND user_id <> ?', code, userId)) {
+    return { error: '“' + code + '” used to belong to another partner, so it stays with them.' };
+  }
+  return { code };
+}
+
+/** Renames a partner's code, retiring the old one so it still resolves. */
+function setPartnerCode(user, raw) {
+  const v = checkCode(raw, user.id);
+  if (v.error) return v;
+  const current = normalizeCode(user.code);
+  if (v.code === current) return { code: v.code, unchanged: true };
+  DB.tx(() => {
+    // Taking back one of their own retired codes: it stops being retired.
+    q.run('DELETE FROM code_history WHERE code = ? AND user_id = ?', v.code, user.id);
+    if (current) {
+      q.run(`INSERT INTO code_history (code,user_id,retired_at) VALUES (?,?,?)
+             ON CONFLICT(code) DO UPDATE SET user_id=excluded.user_id, retired_at=excluded.retired_at`,
+        current, user.id, new Date().toISOString());
+    }
+    q.run('UPDATE users SET code = ? WHERE id = ?', v.code, user.id);
+  });
+  return { code: v.code, previous: current };
+}
+
+/** Retired codes for a partner, newest first — shown so they know they still work. */
+function retiredCodes(userId) {
+  return q.all('SELECT code FROM code_history WHERE user_id = ? ORDER BY retired_at DESC', userId)
+    .map(r => r.code);
+}
+
+module.exports = { PORT, SECURE, settingsFor, servicesList, partnerOf, attachPartners, ownerExists, setCookieFor,
+  normalizeCode, partnerByCode, checkCode, setPartnerCode, retiredCodes };

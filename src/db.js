@@ -120,8 +120,17 @@ const MIGRATIONS = [
   `CREATE INDEX idx_leads_status  ON leads(status);`,
   `CREATE INDEX idx_leads_created ON leads(created_at DESC);`,
   `CREATE INDEX idx_sessions_user ON sessions(user_id);`,
-];
+  `CREATE TABLE seeded_assets (
+     filename  TEXT PRIMARY KEY,
+     seeded_at TEXT NOT NULL
+   );`,
 
+  `CREATE TABLE code_history (
+     code       TEXT PRIMARY KEY COLLATE NOCASE,
+     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     retired_at TEXT NOT NULL
+   );`,
+];
 function migrate() {
   db.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
   const done = new Set(db.prepare('SELECT n FROM _migrations').all().map(r => r.n));
@@ -221,8 +230,7 @@ const ASSET_TYPES = {
 };
 
 function seedAssets(newId) {
-  // A row remembers what has been offered, so deleting in Materials sticks.
-  db.exec('CREATE TABLE IF NOT EXISTS seeded_assets (filename TEXT PRIMARY KEY, seeded_at TEXT NOT NULL)');
+  // seeded_assets remembers what has been offered, so deleting in Materials sticks.
   const dir = path.join(__dirname, '..', 'bundled');
   let sort = q.get('SELECT COALESCE(MAX(sort),0) m FROM assets').m;
   for (const [name, title] of BUNDLED_ASSETS) {
