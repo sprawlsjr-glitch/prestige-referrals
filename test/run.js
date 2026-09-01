@@ -402,6 +402,61 @@ function multipart(fields, files) {
     ok('turning the key off returns to sending links by hand', Mail.enabled() === false);
   }
 
+  /* ------------------------------------------------- what each package pays */
+  section('The earnings chart on the partner home');
+  {
+    const DBM = require('../src/db');
+    const A3 = require('../src/auth');
+
+    ok('the menu matches the website', ['Silver', 'Silver Plus', 'Gold', 'Gold Plus',
+        'Platinum', 'Platinum Plus', 'Diamond', 'Diamond Plus', 'Interior Only', 'Exterior Only',
+        'Wash and Wax (Exterior Only)', 'Wash and Wax (Exterior Only) Plus',
+        'Wash and Wax', 'Wash and Wax Plus', 'Buff Polish Wax (Exterior Only)',
+        'Buff Polish Wax (Exterior Only) Plus', 'Buff Polish Wax', 'Buff Polish Wax Plus',
+        'Add-On Service']
+      .every(n => !!q.get('SELECT id FROM services WHERE name = ? AND archived = 0', n)));
+
+    DBM.syncServices(A3.newId);
+    const count = q.get('SELECT COUNT(*) n FROM services').n;
+    DBM.syncServices(A3.newId);
+    ok('syncing twice changes nothing', q.get('SELECT COUNT(*) n FROM services').n === count);
+
+    r = await partner.get('/partner');
+    const priced = q.all('SELECT name, price FROM services WHERE archived = 0 AND price > 0');
+    ok('every priced package is on the chart',
+       priced.every(sv => r.body.includes('>' + sv.name.replace(/&/g, '&amp;') + '<')),
+       priced.filter(sv => !r.body.includes('>' + sv.name.replace(/&/g, '&amp;') + '<')).map(sv => sv.name).join(','));
+
+    ok('the top package shows the right cut', r.body.includes('$68') && r.body.includes('$680 job'));
+    ok('the cheapest shows the right cut', r.body.includes('$8') && r.body.includes('$80 job'));
+    ok('Silver reads $20 on a $200 job', /Silver<\/div>\s*<div class="amt">\$20</.test(r.body));
+    ok('it says which rate it used', r.body.includes('at your 10%'));
+
+    const widths = (r.body.match(/class="fill" style="width:(\d+)%/g) || [])
+      .map(m => Number(m.match(/(\d+)%/)[1]));
+    ok('every bar fits its track', widths.length === priced.length && widths.every(w => w > 0 && w <= 100),
+       widths.length + ' bars');
+    ok('the biggest earner fills the track', Math.max.apply(null, widths) === 100);
+
+    ok('services quoted job by job are named, not drawn as $0 bars',
+       r.body.includes('Quoted job by job') && r.body.includes('Ceramic Coating')
+       && !/Ceramic Coating<\/div>\s*<div class="amt">\$0</.test(r.body));
+
+    // A partner on their own rate must not be shown the house 10%.
+    const me = q.get('SELECT id FROM users WHERE role = ? AND code IS NOT NULL', 'partner');
+    q.run("UPDATE users SET rate_mode = 'percent', rate_value = 15 WHERE id = ?", partnerId);
+    r = await partner.get('/partner');
+    ok('a custom rate shows their number, not the default', r.body.includes('at your 15%'));
+    ok('and their amounts follow it', /Silver<\/div>\s*<div class="amt">\$30</.test(r.body));
+
+    q.run("UPDATE users SET rate_mode = 'flat', rate_value = 25 WHERE id = ?", partnerId);
+    r = await partner.get('/partner');
+    ok('a flat-rate partner is not told a percentage',
+       !r.body.includes('at your') && r.body.includes('same on every package'));
+
+    q.run('UPDATE users SET rate_mode = NULL, rate_value = NULL WHERE id = ?', partnerId);
+  }
+
   /* ------------------------------------------------------------- security */
   section('Access control');
   r = await partner.get('/owner');

@@ -47,6 +47,8 @@ get('/partner', ctx => {
     settledCount: leads.filter(l => l.status === 'settled').length,
     recent: leads.slice(0, 4),
     oldCodes: C.retiredCodes(me.id),
+    services: C.servicesList(),
+    quoted: C.servicesList().filter(sv => !Number(sv.price)).map(sv => sv.name),
   }));
 }, PARTNER);
 

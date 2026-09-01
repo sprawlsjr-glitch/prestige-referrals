@@ -226,6 +226,56 @@ const DEFAULT_SERVICES = [
   ['Weekly Subscription', 0, 60],
 ];
 
+/* ---------------------------------------------------------------------
+   The menu as it stands on prestigecleaning.us. Kept in step with the
+   site so a partner is never quoted a price the shop doesn't charge.
+   Syncing is additive: prices the owner has edited are left alone. */
+const CATALOGUE = [
+  ['Silver', 200], ['Silver Plus', 280],
+  ['Gold', 280], ['Gold Plus', 360],
+  ['Platinum', 360], ['Platinum Plus', 440],
+  ['Diamond', 600], ['Diamond Plus', 680],
+  ['Interior Only', 100],
+  ['Exterior Only', 100],
+  ['Wash and Wax (Exterior Only)', 200], ['Wash and Wax (Exterior Only) Plus', 280],
+  ['Wash and Wax', 300], ['Wash and Wax Plus', 380],
+  ['Buff Polish Wax (Exterior Only)', 500], ['Buff Polish Wax (Exterior Only) Plus', 580],
+  ['Buff Polish Wax', 600], ['Buff Polish Wax Plus', 680],
+  ['Add-On Service', 80],
+];
+
+/* The first release shipped these under longer names. Renaming keeps one
+   row per package instead of two, and carries existing leads across. */
+const SERVICE_RENAMES = [
+  ['Silver Detail', 'Silver'], ['Gold Detail', 'Gold'],
+  ['Platinum Detail', 'Platinum'], ['Diamond Detail', 'Diamond'],
+];
+
+/** Additive and idempotent — safe on every boot, whatever shape it is in. */
+function syncServices(newId) {
+  for (const [from, to] of SERVICE_RENAMES) {
+    const old = q.get('SELECT * FROM services WHERE name = ?', from);
+    if (!old || q.get('SELECT id FROM services WHERE name = ?', to)) continue;
+    q.run('UPDATE services SET name = ? WHERE id = ?', to, old.id);
+    q.run('UPDATE leads SET service = ? WHERE service = ?', to, from);
+  }
+  /* The real Plus tiers are now listed with their own prices, so the old
+     catch-all upgrade line just muddies the chart. Retire it — unless a
+     lead already refers to it, in which case history wins. */
+  const stale = q.get("SELECT id FROM services WHERE name = 'Plus Upgrade (any tier)' AND archived = 0");
+  if (stale && !q.get("SELECT id FROM leads WHERE service = 'Plus Upgrade (any tier)'")) {
+    q.run('UPDATE services SET archived = 1 WHERE id = ?', stale.id);
+  }
+
+  let sort = q.get('SELECT COALESCE(MAX(sort),0) m FROM services').m;
+  for (const [name, price] of CATALOGUE) {
+    if (q.get('SELECT id FROM services WHERE name = ?', name)) continue;
+    sort += 1;
+    q.run('INSERT INTO services (id,name,price,payout,sort) VALUES (?,?,?,?,?)',
+      newId('sv'), name, price, Math.round(price * 0.1 * 100) / 100, sort);
+  }
+}
+
 function seedServices(newId) {
   if (q.get('SELECT COUNT(*) AS n FROM services').n > 0) return;
   DEFAULT_SERVICES.forEach((s, i) => {
@@ -293,4 +343,4 @@ function seedAssets(newId) {
   }
 }
 
-module.exports = { open, handle, q, tx, migrate, ensureSchema, MIGRATIONS, getSettings, setSetting, seedServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };
+module.exports = { open, handle, q, tx, migrate, ensureSchema, MIGRATIONS, getSettings, setSetting, seedServices, syncServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };

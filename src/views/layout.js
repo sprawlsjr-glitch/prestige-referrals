@@ -7,6 +7,7 @@ const CSS = `
   --ground:#ECF1F7; --surface:#FFFFFF; --surface2:#DFE8F2; --line:#C7D5E4;
   --ink:#0B1030; --ink2:#3F506B; --ink3:#6D809B;
   --brass:#13629A; --brassbg:#DCEAF6; --brassline:#9FC6E3;
+  --bar:#13629A;   /* the earnings bars — validated against this surface */
   --teal:#12706A; --tealbg:#D5EBE9;
   --green:#1C7548; --greenbg:#D7EDE1;
   --red:#A33E3A; --redbg:#F5DEDC;
@@ -19,6 +20,7 @@ const CSS = `
     --ground:#070B16; --surface:#0E1524; --surface2:#182134; --line:#25314A;
     --ink:#E6EDF7; --ink2:#9BADC4; --ink3:#6C7E9A;
     --brass:#5BA3DC; --brassbg:#0E2439; --brassline:#28496D;
+    --bar:#4E9AD6;   /* stepped down for the dark surface, revalidated */
     --teal:#4FBDB6; --tealbg:#0A2A29;
     --green:#57C08A; --greenbg:#0C2B1F;
     --red:#E2857F; --redbg:#33191A;
@@ -178,7 +180,21 @@ function page(opts) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<style>${CSS}</style>
+<style>${CSS}
+/* earnings bars — a bar table: every value is directly labelled, so no
+   legend (one series) and no tooltip is needed to read it */
+.earnrow{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 0;
+  border-top:1px solid var(--line)}
+.earnrow:first-of-type{border-top:0}
+.earnrow:hover{background:var(--surface2)}
+.earnrow .nm{font-size:13.5px;font-weight:600;color:var(--ink);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.earnrow .amt{font-size:14px;font-weight:700;color:var(--ink);text-align:right;
+  font-variant-numeric:tabular-nums}
+.earnrow .track{grid-column:1 / -1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden}
+.earnrow .fill{display:block;height:100%;background:var(--bar);border-radius:4px;min-width:3px}
+.earnrow .px{grid-column:1 / -1;font-size:11.5px;color:var(--ink3);margin-top:-1px}
+</style>
 </head><body>
 ${o.body || ''}
 </body></html>`;

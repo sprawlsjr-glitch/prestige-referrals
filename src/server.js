@@ -18,6 +18,7 @@ require('./routes/partner');
 function boot() {
   DB.open(process.env.DB_FILE);
   DB.seedServices(A.newId);
+  DB.syncServices(A.newId);
   DB.seedAssets(A.newId);
   A.purgeExpiredSessions();
 

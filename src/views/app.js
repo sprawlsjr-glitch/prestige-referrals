@@ -464,6 +464,30 @@ function ownerAssets(ctx, list) {
 
 /* ============================================================ PARTNER */
 
+/* What a partner earns on each package. One series, so no legend; every
+   bar is directly labelled, so no tooltip is needed to read a value. Bars
+   are scaled to the biggest payout, not to zero-to-price, so the shape
+   answers the only question that matters: which jobs are worth chasing. */
+function earningsChart(services, rate, money) {
+  const priced = services.filter(s => Number(s.price) > 0);
+  if (!priced.length) return '';
+
+  const cut = s => rate.mode === 'percent' ? Number(s.price) * rate.percent / 100
+              : rate.mode === 'flat' ? rate.flat
+              : Number(s.payout) || 0;
+
+  const rows = priced.map(s => ({ name: s.name, price: Number(s.price), pay: cut(s) }))
+                     .sort((a, b) => b.pay - a.pay || b.price - a.price);
+  const top = Math.max.apply(null, rows.map(r => r.pay)) || 1;
+
+  return rows.map(r => `<div class="earnrow">
+      <div class="nm">${esc(r.name)}</div>
+      <div class="amt">${esc(money(r.pay))}</div>
+      <div class="track"><span class="fill" style="width:${Math.max(3, Math.round(r.pay / top * 100))}%"></span></div>
+      <div class="px">${esc(money(r.price))} job</div>
+    </div>`).join('');
+}
+
 function partnerHome(ctx, d) {
   const s = ctx.settings, p = ctx.user;
   const link = (s.base_url || '') + '/r/' + p.code;
@@ -514,9 +538,21 @@ function partnerHome(ctx, d) {
       <a class="btn pri full" href="${esc(s.toolkit_url)}" target="_blank" rel="noopener">Open the toolkit</a></div>`;
   }
 
+  const chart = earningsChart(d.services || [], r, M.money0);
   h += `<div class="sec"><h2>What you earn</h2></div>
   <div class="card pad"><p style="margin:0 0 6px"><strong>${esc(rateText)}</strong></p>
-    <p class="small muted" style="margin:0">${esc(s.hold_note)} ${esc(s.payout_note)}</p></div>`;
+    <p class="small muted" style="margin:0">${esc(s.hold_note)} ${esc(s.payout_note)}</p></div>
+  ${chart ? `<div class="card pad" style="margin-top:10px">
+    <div class="eyebrow" style="margin-bottom:2px">Your cut, job by job</div>
+    <p class="tiny muted" style="margin:0 0 10px">${r.mode === 'percent'
+        ? 'Every package on the menu at your ' + esc(r.percent) + '%.'
+        : r.mode === 'flat'
+          ? 'You earn the same on every package — the bars show the job sizes.'
+          : 'Set per service by the shop.'}</p>
+    ${chart}
+    ${(d.quoted || []).length ? `<p class="tiny muted" style="margin:10px 0 0">
+      Quoted job by job: ${d.quoted.map(esc).join(' · ')}.</p>` : ''}
+  </div>` : ''}`;
 
   if (d.recent.length) {
     h += `<div class="sec"><h2>Recent</h2><a class="btn sm ghost" href="/partner/leads">See all</a></div>
