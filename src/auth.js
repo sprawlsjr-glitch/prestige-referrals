@@ -128,9 +128,44 @@ function tooManyAttempts(key, limit = 8, windowMs = 15 * 60e3) {
 
 function clearAttempts(key) { attempts.delete(key); }
 
+/* ------------------------------------------------------------- invites
+   A partner is invited with a one-time link instead of a password, so a
+   password is never texted or emailed to anyone. Only the hash is stored:
+   the link itself exists once, in the message the owner sends. */
+
+const INVITE_DAYS = 14;
+
+function inviteHash(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function createInvite(userId) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  const now = new Date();
+  const exp = new Date(now.getTime() + INVITE_DAYS * 864e5);
+  q.run('DELETE FROM invites WHERE user_id = ? AND used_at IS NULL', userId);
+  q.run('INSERT INTO invites (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)',
+    inviteHash(token), userId, now.toISOString(), exp.toISOString());
+  return { token, expires: exp };
+}
+
+/** The partner an unused, unexpired invite belongs to — or null. */
+function userForInvite(token) {
+  if (!token) return null;
+  const row = q.get('SELECT * FROM invites WHERE token_hash = ?', inviteHash(token));
+  if (!row || row.used_at) return null;
+  if (new Date(row.expires_at) < new Date()) return null;
+  return q.get("SELECT * FROM users WHERE id = ? AND role = 'partner'", row.user_id);
+}
+
+function useInvite(token) {
+  q.run('UPDATE invites SET used_at = ? WHERE token_hash = ?', new Date().toISOString(), inviteHash(token));
+}
+
 module.exports = {
   COOKIE, newId, hashPassword, verifyPassword,
   createSession, userForSession, destroySession, destroyAllSessions, purgeExpiredSessions,
   parseCookies, sessionCookie, clearCookie,
   makeCode, tooManyAttempts, clearAttempts,
+  createInvite, userForInvite, useInvite, INVITE_DAYS,
 };

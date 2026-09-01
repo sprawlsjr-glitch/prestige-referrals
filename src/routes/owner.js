@@ -4,6 +4,7 @@ const DB = require('../db');
 const A = require('../auth');
 const H = require('../http');
 const C = require('../context');
+const Mail = require('../mail');
 const M = require('../money');
 const V = require('../views/app');
 const { q, tx } = DB;
@@ -16,6 +17,9 @@ function flashFrom(ctx) {
     pw: ['ok', 'Password changed.'], saved: ['ok', 'Saved.'],
     paid: ['ok', 'Payout recorded.'], approved: ['ok', 'Partner approved — send them their sign-in.'],
     uploaded: ['ok', 'Files uploaded.'],
+    mailsent: ['ok', 'Test email sent — check that inbox.'],
+    mailoff: ['bad', 'Email is off. Add RESEND_API_KEY in Render, then redeploy.'],
+    mailfrom: ['bad', 'Set the \u201cSend emails from\u201d address first.'],
     wrong: ['bad', 'That current password is not right.'],
     short: ['bad', 'Password needs at least 8 characters.'],
     email: ['bad', 'That email is already in use.'],
@@ -25,6 +29,8 @@ function flashFrom(ctx) {
   };
   const m = MSG[ok || e];
   if (m) return require('../views/layout').flash(m[0], m[1]);
+  const mailerr = ctx.url.searchParams.get('mailerr');
+  if (mailerr) return require('../views/layout').flash('bad', 'Email failed: ' + mailerr);
   const bad = ctx.url.searchParams.get('codeerr');
   return bad ? require('../views/layout').flash('bad', bad) : '';
 }
@@ -176,7 +182,8 @@ get('/owner/partners/:id', (ctx, p) => {
     leads: q.get('SELECT COUNT(*) n FROM leads WHERE partner_id = ?', u.id).n,
     owed: M.owedFor(u.id), paid: M.paidFor(u.id),
     oldCodes: C.retiredCodes(u.id),
-  }, ctx.url.searchParams.get('pw') || ''));
+  }, ctx.url.searchParams.get('pw') || '', ctx.url.searchParams.get('invite') || '',
+     ctx.url.searchParams.get('mail') || ''));
 }, OWNER);
 
 post('/owner/partners/:id', async (ctx, p) => {
@@ -199,6 +206,15 @@ post('/owner/partners/:id', async (ctx, p) => {
   H.redirect(ctx.res, '/owner/partners/' + u.id + '?ok=saved');
 }, OWNER);
 
+post('/owner/partners/:id/invite', async (ctx, p) => {
+  const u = q.get("SELECT * FROM users WHERE id = ? AND role='partner'", p.id);
+  if (!u) return H.notFound(ctx.res);
+  const inv = A.createInvite(u.id);
+  const mailed = await C.emailInvite(ctx.settings, u, inv.token);
+  H.redirect(ctx.res, '/owner/partners/' + u.id + '?invite=' + encodeURIComponent(inv.token)
+    + '&mail=' + encodeURIComponent(mailed.sent ? 'sent' : (mailed.reason || 'off')));
+}, OWNER);
+
 post('/owner/partners/:id/password', (ctx, p) => {
   const u = q.get("SELECT * FROM users WHERE id = ? AND role='partner'", p.id);
   if (!u) return H.notFound(ctx.res);
@@ -215,7 +231,7 @@ post('/owner/partners/:id/delete', (ctx, p) => {
   H.redirect(ctx.res, '/owner/partners');
 }, OWNER);
 
-post('/owner/applications/:id/approve', (ctx, p) => {
+post('/owner/applications/:id/approve', async (ctx, p) => {
   const a = q.get('SELECT * FROM applications WHERE id = ?', p.id);
   if (!a) return H.redirect(ctx.res, '/owner/partners');
   if (q.get('SELECT id FROM users WHERE email = ?', a.email)) return H.redirect(ctx.res, '/owner/partners?e=email');
@@ -225,7 +241,11 @@ post('/owner/applications/:id/approve', (ctx, p) => {
     q.run('DELETE FROM applications WHERE id = ?', p.id);
     return uid;
   });
-  H.redirect(ctx.res, '/owner/partners/' + id + '?pw=' + encodeURIComponent(pw));
+  const inv = A.createInvite(id);
+  const who = q.get('SELECT * FROM users WHERE id = ?', id);
+  const mailed = await C.emailInvite(ctx.settings, who, inv.token);
+  H.redirect(ctx.res, '/owner/partners/' + id + '?invite=' + encodeURIComponent(inv.token)
+    + '&mail=' + encodeURIComponent(mailed.sent ? 'sent' : (mailed.reason || 'off')));
 }, OWNER);
 
 post('/owner/applications/:id/decline', (ctx, p) => {
@@ -276,16 +296,33 @@ post('/owner/payouts/:id', async (ctx, p) => {
 /* -------------------------------------------------------------- settings */
 
 get('/owner/settings', ctx => {
+  ctx.settings.mail_on = Mail.enabled();
   ctx.flash = flashFrom(ctx);
   V_send(ctx, V.ownerSettings(ctx, C.servicesList()));
 }, OWNER);
 
 post('/owner/settings', async ctx => {
   const { fields } = await H.parseForm(ctx.req);
-  for (const k of ['business_name', 'tagline', 'phone', 'service_area', 'website', 'booking_url', 'toolkit_url', 'payout_note']) {
+  for (const k of ['business_name', 'tagline', 'phone', 'service_area', 'website', 'booking_url', 'toolkit_url', 'payout_note', 'mail_from', 'mail_reply_to']) {
     if (k in fields) DB.setSetting(k, H.clean(fields[k], 600));
   }
   H.redirect(ctx.res, '/owner/settings?ok=saved');
+}, OWNER);
+
+post('/owner/settings/test-email', async ctx => {
+  const { fields } = await H.parseForm(ctx.req);
+  const to = H.clean(fields.to, 200) || ctx.user.email;
+  if (!Mail.enabled()) return H.redirect(ctx.res, '/owner/settings?e=mailoff');
+  if (!ctx.settings.mail_from) return H.redirect(ctx.res, '/owner/settings?e=mailfrom');
+  const res = await Mail.send({
+    from: ctx.settings.mail_from,
+    replyTo: ctx.settings.mail_reply_to || '',
+    to,
+    subject: 'Test from ' + (ctx.settings.business_name || 'your referral program'),
+    text: 'This is a test. If it reached you, partner sign-in links will too.',
+  });
+  H.redirect(ctx.res, '/owner/settings?' + (res.ok
+    ? 'ok=mailsent' : 'mailerr=' + encodeURIComponent(res.error || 'failed')));
 }, OWNER);
 
 post('/owner/settings/rates', async ctx => {

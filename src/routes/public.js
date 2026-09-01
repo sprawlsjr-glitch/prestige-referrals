@@ -44,6 +44,55 @@ post('/setup', async ctx => {
   H.redirect(ctx.res, '/owner', { 'Set-Cookie': C.setCookieFor(id) });
 });
 
+/* ---------------------------------------------------------------- invite
+   The link the owner sends a new partner. They pick their own password
+   here; nobody ever has to send a password in a text message. */
+
+function invitePage(ctx, token, name, err) {
+  return Layout.page({
+    title: 'Set your password',
+    body: `<div class="gate"><div class="card pad">
+      <h3 style="font-size:17px;margin-bottom:2px">Welcome${name ? ', ' + H.esc(String(name).split(' ')[0]) : ''}</h3>
+      <p class="small muted" style="margin:0 0 12px">Pick a password and you're in.</p>
+      ${err ? Layout.flash('bad', err) : ''}
+      <form method="post" action="/invite/${H.esc(token)}">
+        <label class="f"><span>Choose a password</span>
+          <input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+        <button class="btn pri full">Set my password</button></form>
+      <p class="hint" style="margin-top:10px">This link works once, and only for you.</p></div></div>`,
+  });
+}
+
+function inviteExpired() {
+  return Layout.page({
+    title: 'Link expired',
+    body: `<div class="gate"><div class="card pad">
+      <h3 style="font-size:17px">That link has expired</h3>
+      <p class="small muted">Invite links last ${A.INVITE_DAYS} days and work once. Ask the shop to send you a fresh one.</p>
+      <a class="btn full" href="/login" style="margin-top:10px">Go to sign in</a></div></div>`,
+  });
+}
+
+get('/invite/:token', (ctx, params) => {
+  const u = A.userForInvite(params.token);
+  if (!u) return H.html(ctx.res, inviteExpired(), 410);
+  H.html(ctx.res, invitePage(ctx, params.token, u.name, ''));
+});
+
+post('/invite/:token', async (ctx, params) => {
+  const u = A.userForInvite(params.token);
+  if (!u) return H.html(ctx.res, inviteExpired(), 410);
+  const { fields } = await H.parseForm(ctx.req);
+  const pw = String(fields.password || '');
+  if (pw.length < 8) {
+    return H.html(ctx.res, invitePage(ctx, params.token, u.name, 'Password needs at least 8 characters.'), 400);
+  }
+  q.run('UPDATE users SET password_hash = ? WHERE id = ?', A.hashPassword(pw), u.id);
+  A.useInvite(params.token);
+  A.destroyAllSessions(u.id);
+  H.redirect(ctx.res, '/partner', { 'Set-Cookie': C.setCookieFor(u.id) });
+});
+
 /* ----------------------------------------------------------------- login */
 
 get('/login', ctx => {

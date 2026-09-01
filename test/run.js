@@ -282,6 +282,126 @@ function multipart(fields, files) {
   ok('the code they just left keeps working',
      !!q.get('SELECT code FROM code_history WHERE code = ? AND user_id = ?', 'MELDETAIL22', partnerId));
 
+  /* ------------------------------------------------- inviting a new partner */
+  section('A new partner gets a sign-in link');
+  {
+    r = await anon.post('/apply', { name: 'Nia Bell', email: 'nia@partner.test',
+                                    phone: '770-555-0123', why: 'I know a lot of car people' });
+    ok('anyone can apply', r.status === 200 || r.status === 302);
+    const app = q.get("SELECT * FROM applications WHERE email = 'nia@partner.test'");
+    ok('the application reaches the shop', !!app);
+
+    r = await owner.post('/owner/applications/' + app.id + '/approve', {});
+    const loc = r.headers.location || '';
+    ok('approving hands the owner a link to send, not a password', /[?&]invite=/.test(loc), loc);
+    const token = decodeURIComponent((loc.match(/[?&]invite=([^&]+)/) || [])[1] || '');
+    const nia = q.get("SELECT * FROM users WHERE email = 'nia@partner.test'");
+    ok('the partner account exists', !!nia && nia.role === 'partner');
+    ok('they have a referral code already', !!nia.code);
+
+    r = await owner.get('/owner/partners/' + nia.id + '?invite=' + encodeURIComponent(token));
+    ok('the owner sees the link ready to send', r.body.includes('/invite/' + token));
+    ok('with a way to text it', r.body.includes('sms:'));
+    ok('and a way to email it', r.body.includes('mailto:'));
+
+    ok('the raw link is never stored', !q.get('SELECT 1 AS x FROM invites WHERE token_hash = ?', token));
+
+    const invitee = makeClient(port);
+    r = await invitee.get('/invite/' + token);
+    ok('the partner can open the link', r.status === 200 && r.body.includes('Set my password'));
+    r = await invitee.post('/invite/' + token, { password: 'short' });
+    ok('a too-short password is refused', r.status === 400);
+    r = await invitee.post('/invite/' + token, { password: 'niapassword1' });
+    ok('setting a password signs them straight in', r.status === 302 && r.headers.location === '/partner');
+    r = await invitee.get('/partner');
+    ok('and they land in their own portal', r.status === 200 && r.body.includes(nia.code));
+
+    r = await anon.get('/invite/' + token);
+    ok('the link stops working once used', r.status === 410);
+    r = await anon.get('/invite/' + token + 'x');
+    ok('a made-up link is refused', r.status === 410);
+
+    const fresh = makeClient(port);
+    r = await fresh.post('/login', { email: 'nia@partner.test', password: 'niapassword1' });
+    ok('the password they chose is the one that works', r.status === 302);
+
+    r = await owner.post('/owner/partners/' + nia.id + '/invite', {});
+    const second = decodeURIComponent((String(r.headers.location).match(/[?&]invite=([^&]+)/) || [])[1] || '');
+    ok('the owner can send a fresh link any time', !!second && second !== token);
+    q.run("UPDATE invites SET expires_at = '2020-01-01T00:00:00.000Z' WHERE user_id = ?", nia.id);
+    r = await anon.get('/invite/' + second);
+    ok('an expired link is refused', r.status === 410);
+
+    r = await partner.get('/owner/partners/' + nia.id + '/invite');
+    ok('a partner cannot mint links for anyone', r.status === 302 || r.status === 404);
+  }
+
+  /* ------------------------------------------------ sending the link by email */
+  section('Sending the sign-in link by email');
+  {
+    const Mail = require('../src/mail');
+    const sent = [];
+
+    // With no key configured, nothing is sent and nothing breaks.
+    delete process.env.RESEND_API_KEY;
+    ok('email is off until a key is configured', Mail.enabled() === false);
+
+    // Switch it on and capture the request instead of hitting the network.
+    process.env.RESEND_API_KEY = 're_test_key';
+    Mail.__setRequest(async (url, init) => {
+      sent.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+      return { ok: true, status: 200, json: async () => ({ id: 'x' }) };
+    });
+    ok('email switches on with a key', Mail.enabled() === true);
+
+    await owner.post('/owner/settings', {
+      business_name: 'Prestige Mobile Cleaning',
+      mail_from: 'Prestige <partners@prestigecleaning.us>',
+      mail_reply_to: 'mel@prestigecleaning.us',
+    });
+
+    r = await anon.post('/apply', { name: 'Omar Vance', email: 'omar@partner.test', phone: '770-555-0166' });
+    const app2 = q.get("SELECT * FROM applications WHERE email = 'omar@partner.test'");
+    r = await owner.post('/owner/applications/' + app2.id + '/approve', {});
+    ok('approving now sends the email by itself', /[?&]mail=sent/.test(r.headers.location || ''), r.headers.location);
+    ok('exactly one email went out', sent.length === 1, String(sent.length));
+
+    const msg = sent[0];
+    ok('it goes to Resend', msg.url === Mail.ENDPOINT);
+    ok('the key travels in the header, never the body',
+       /^Bearer re_test_key$/.test(msg.headers.Authorization) && !JSON.stringify(msg.body).includes('re_test_key'));
+    ok('addressed to the new partner', msg.body.to[0] === 'omar@partner.test');
+    ok('from the address the owner set', msg.body.from === 'Prestige <partners@prestigecleaning.us>');
+    ok('replies come back to the owner', msg.body.reply_to === 'mel@prestigecleaning.us');
+
+    const token2 = decodeURIComponent((String(r.headers.location).match(/[?&]invite=([^&]+)/) || [])[1] || '');
+    ok('the email carries the working link', msg.body.text.includes('/invite/' + token2));
+    ok('and says it expires', /expires in \d+ days/.test(msg.body.text));
+
+    const omar = makeClient(port);
+    r = await omar.get('/invite/' + token2);
+    ok('the link in the email actually works', r.status === 200);
+
+    // A provider outage must not cost the owner the link.
+    Mail.__setRequest(async () => ({ ok: false, status: 422, json: async () => ({ message: 'domain not verified' }) }));
+    const nia2 = q.get("SELECT id FROM users WHERE email = 'nia@partner.test'");
+    r = await owner.post('/owner/partners/' + nia2.id + '/invite', {});
+    ok('a failed send still hands over the link', /[?&]invite=/.test(r.headers.location || ''));
+    ok('and says plainly why it failed', /mail=domain%20not%20verified|mail=domain\+not\+verified/.test(r.headers.location || ''),
+       r.headers.location);
+    const shown = await owner.get(String(r.headers.location).replace(/^[^?]*/, '/owner/partners/' + nia2.id));
+    ok('the owner is told, and can still copy it', shown.body.includes('domain not verified') && shown.body.includes('/invite/'));
+
+    // The test-send button.
+    Mail.__setRequest(async (url, init) => { sent.push({ body: JSON.parse(init.body) }); return { ok: true, status: 200, json: async () => ({}) }; });
+    r = await owner.post('/owner/settings/test-email', { to: 'mel@prestigecleaning.us' });
+    ok('a test email can be sent before any partner sees it', /ok=mailsent/.test(r.headers.location || ''));
+
+    Mail.__setRequest(null);
+    delete process.env.RESEND_API_KEY;
+    ok('turning the key off returns to sending links by hand', Mail.enabled() === false);
+  }
+
   /* ------------------------------------------------------------- security */
   section('Access control');
   r = await partner.get('/owner');

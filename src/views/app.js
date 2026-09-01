@@ -198,11 +198,60 @@ function ownerPartnerNew(ctx, err) {
   return frame(ctx, '/owner/partners', body);
 }
 
-function ownerPartnerDetail(ctx, p, d, tempPassword) {
+/* The owner sends this themselves — from their own phone or mail app, so it
+   arrives from a number the partner recognises. */
+function inviteCard(ctx, p, token, mailState) {
+  const base = ctx.settings.base_url || '';
+  const url = base + '/invite/' + token;
+  const shop = ctx.settings.business_name || 'Prestige Mobile Cleaning';
+  const first = String(p.name || '').split(' ')[0];
+  const msg = 'Hey ' + first + " — you're set up as a referral partner for " + shop + '. '
+            + 'Open this link to pick your password and get your code: ' + url;
+  const sms = 'sms:' + String(p.phone || '').replace(/[^0-9+]/g, '') + '?&body=' + encodeURIComponent(msg);
+  const mail = 'mailto:' + encodeURIComponent(p.email || '')
+             + '?subject=' + encodeURIComponent('Your ' + shop + ' partner sign-in')
+             + '&body=' + encodeURIComponent(msg);
+  const MAILNOTE = {
+    sent: ['ok', 'Emailed to ' + (p.email || '') + '. Send the link yourself too if you want it to land faster.'],
+    off: ['', ''],
+    no_email: ['bad', 'No email on file for them, so nothing was sent.'],
+    no_sender: ['bad', 'Email is on, but no “send from” address is set in Settings.'],
+  };
+  const note = MAILNOTE[mailState] || (mailState ? ['bad', 'Email failed: ' + mailState] : ['', '']);
+  return `<div class="card pad" style="margin-bottom:14px;border-color:var(--blueline)">
+    ${note[0] ? flash(note[0], note[1]) : ''}
+    <div class="eyebrow" style="margin-bottom:6px">Send this to ${esc(p.name)}</div>
+    <div class="mono small" id="invlink" style="word-break:break-all;background:var(--surface2);
+         border-radius:8px;padding:9px 10px;margin-bottom:10px">${esc(url)}</div>
+    <div class="btnrow">
+      <button class="btn pri" type="button" id="invcopy">Copy link</button>
+      ${p.phone ? `<a class="btn" href="${esc(sms)}">Text it</a>` : ''}
+      ${p.email ? `<a class="btn" href="${esc(mail)}">Email it</a>` : ''}
+    </div>
+    <p class="tiny muted" style="margin:10px 0 0">Good for ${14} days, works once. Making a new link cancels this one.</p>
+    <script>
+      (function(){
+        var b=document.getElementById('invcopy');
+        if(!b) return;
+        b.addEventListener('click',function(){
+          var t=document.getElementById('invlink').textContent;
+          var done=function(ok){ b.textContent = ok ? 'Copied' : 'Select it and copy';
+            setTimeout(function(){ b.textContent='Copy link'; },1800); };
+          if(navigator.clipboard&&navigator.clipboard.writeText){
+            navigator.clipboard.writeText(t).then(function(){done(true);},function(){done(false);});
+          } else { done(false); }
+        });
+      })();
+    <\/script>
+  </div>`;
+}
+
+function ownerPartnerDetail(ctx, p, d, tempPassword, inviteToken, mailState) {
   const link = ctx.settings.base_url ? ctx.settings.base_url + '/r/' + p.code : '/r/' + p.code;
   const body = `<p><a class="small" href="/owner/partners">← Partners</a></p>
   <div class="sec" style="margin-top:6px"><h2>${esc(p.name)}</h2></div>
   ${tempPassword ? flash('ok', 'New password set: ' + tempPassword + ' — send it to them now, it is not shown again.') : ''}
+  ${inviteToken ? inviteCard(ctx, p, inviteToken, mailState) : ''}
   <div class="codebox" style="margin-bottom:14px"><div style="flex:1">
     <div class="eyebrow">Referral code</div><div class="codeval">${esc(p.code)}</div>
     <div class="tiny muted" style="margin-top:6px">Their booking link: <span class="mono">${esc(link)}</span></div>
@@ -211,6 +260,13 @@ function ownerPartnerDetail(ctx, p, d, tempPassword) {
     ${tile('Leads', d.leads, 'sent in')}
     ${tile('Owed', M.money0(d.owed), 'customer paid', true)}
     ${tile('Paid', M.money0(d.paid), 'all-time')}
+  </div>
+  <div class="card pad" style="margin-bottom:14px">
+    <div class="eyebrow" style="margin-bottom:6px">Their sign-in</div>
+    <p class="small muted" style="margin:0 0 10px">The app doesn\u2019t send email or texts. Make a link and send it
+    yourself — they pick their own password, so you never have to send one.</p>
+    <form method="post" action="/owner/partners/${esc(p.id)}/invite">
+      <button class="btn pri full">${inviteToken ? 'Make a new link' : 'Make a sign-in link'}</button></form>
   </div>
   <div class="card pad"><form method="post" action="/owner/partners/${esc(p.id)}">
     <label class="f"><span>Name</span><input type="text" name="name" value="${esc(p.name)}"></label>
@@ -319,6 +375,24 @@ function ownerSettings(ctx, services) {
     ${f('payout_note', 'How and when you pay', s.payout_note)}
     <button class="btn pri">Save business info</button>
   </form></div>
+
+  <div class="sec"><h2>Email</h2></div>
+  <div class="card pad">
+    ${s.mail_on
+      ? `<p class="small muted" style="margin-top:0">Email is <b>on</b>. New partners get their sign-in link automatically
+         the moment you approve them — you can still text it as well.</p>`
+      : `<p class="small muted" style="margin-top:0">Email is <b>off</b>, so you send sign-in links yourself.
+         To switch it on, add a <span class="mono">RESEND_API_KEY</span> in your Render dashboard under
+         Environment, then redeploy. Nothing else changes.</p>`}
+    <form method="post" action="/owner/settings">
+      ${f('mail_from', 'Send emails from', s.mail_from, 'e.g. Prestige Mobile Cleaning <partners@prestigecleaning.us> — the domain has to be verified with Resend.')}
+      ${f('mail_reply_to', 'Replies go to', s.mail_reply_to, 'Optional. Your normal inbox.')}
+      <button class="btn pri">Save email settings</button>
+    </form>
+    ${s.mail_on ? `<form method="post" action="/owner/settings/test-email" style="margin-top:12px">
+      <label class="f"><span>Send a test to</span><input type="email" name="to" value="${esc(ctx.user.email || '')}"></label>
+      <button class="btn full">Send a test email</button></form>` : ''}
+  </div>
 
   <div class="sec"><h2>Commission</h2></div>
   <div class="card pad"><form method="post" action="/owner/settings/rates">

@@ -20,6 +20,10 @@ services:
         value: /var/data
       - key: NODE_VERSION
         value: "22.22.2"
+      # Optional: turn on automatic emails. Add the key in the Render dashboard
+      # (Environment tab) rather than here — this file is public in the repo.
+      # - key: RESEND_API_KEY
+      #   sync: false
       # Optional: create the owner account on first boot instead of using /setup.
       # - key: OWNER_EMAIL
       #   value: you@prestigecleaning.us

@@ -138,6 +138,13 @@ function ensureSchema() {
              retired_at TEXT NOT NULL
            )`);
   addColumn('seeded_assets', 'sha', "TEXT NOT NULL DEFAULT ''");
+  db.exec(`CREATE TABLE IF NOT EXISTS invites (
+             token_hash TEXT PRIMARY KEY,
+             user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+             created_at TEXT NOT NULL,
+             expires_at TEXT NOT NULL,
+             used_at    TEXT
+           )`);
 }
 
 function addColumn(table, column, definition) {
@@ -183,6 +190,8 @@ const SETTING_DEFAULTS = {
   toolkit_url: '',
   payout_note: 'Paid weekly on Fridays via Cash App or Zelle.',
   hold_note: 'You get paid after the customer pays — job finished and settled up.',
+  mail_from: '',
+  mail_reply_to: '',
   rate_mode: 'percent',
   rate_flat: '25',
   rate_percent: '10',

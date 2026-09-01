@@ -1,6 +1,7 @@
 'use strict';
 const DB = require('./db');
 const A = require('./auth');
+const Mail = require('./mail');
 const { q } = DB;
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -110,5 +111,41 @@ function retiredCodes(userId) {
     .map(r => r.code);
 }
 
+/* ------------------------------------------------------ partner invites
+   One place that knows what an invite link says, so the email and the
+   text message the owner sends are word for word the same. */
+
+function inviteMessage(settings, partner, token) {
+  const url = (settings.base_url || '') + '/invite/' + token;
+  const shop = settings.business_name || 'Prestige Mobile Cleaning';
+  const first = String(partner.name || '').split(' ')[0];
+  return {
+    url,
+    subject: 'Your ' + shop + ' partner sign-in',
+    text: 'Hey ' + first + " — you're set up as a referral partner for " + shop + '.\n\n'
+        + 'Open this link to pick your password and get your referral code:\n' + url + '\n\n'
+        + 'The link works once and expires in ' + A.INVITE_DAYS + ' days. '
+        + 'Questions: ' + (settings.phone || '') ,
+  };
+}
+
+/** Emails the invite when email is switched on. Returns what happened so the
+    owner is told the truth either way — the link is shown regardless. */
+async function emailInvite(settings, partner, token) {
+  if (!Mail.enabled()) return { sent: false, reason: 'off' };
+  if (!partner.email) return { sent: false, reason: 'no_email' };
+  if (!settings.mail_from) return { sent: false, reason: 'no_sender' };
+  const m = inviteMessage(settings, partner, token);
+  const res = await Mail.send({
+    from: settings.mail_from,
+    replyTo: settings.mail_reply_to || '',
+    to: partner.email,
+    subject: m.subject,
+    text: m.text,
+  });
+  return res.ok ? { sent: true } : { sent: false, reason: res.error };
+}
+
 module.exports = { PORT, SECURE, settingsFor, servicesList, partnerOf, attachPartners, ownerExists, setCookieFor,
-  normalizeCode, partnerByCode, checkCode, setPartnerCode, retiredCodes };
+  normalizeCode, partnerByCode, checkCode, setPartnerCode, retiredCodes,
+  inviteMessage, emailInvite };
