@@ -121,25 +121,30 @@ const MIGRATIONS = [
   `CREATE INDEX idx_leads_status  ON leads(status);`,
   `CREATE INDEX idx_leads_created ON leads(created_at DESC);`,
   `CREATE INDEX idx_sessions_user ON sessions(user_id);`,
-  /* IF NOT EXISTS on both: an earlier release created seeded_assets outside
-     the migration list, so a database from that release already has it. */
-  `CREATE TABLE IF NOT EXISTS seeded_assets (
-     filename  TEXT PRIMARY KEY,
-     seeded_at TEXT NOT NULL
-   );`,
-
-  `CREATE TABLE IF NOT EXISTS code_history (
-     code       TEXT PRIMARY KEY COLLATE NOCASE,
-     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-     retired_at TEXT NOT NULL
-   );`,
-
-  /* Append-only from here. A migration's INDEX is its identity — every
-     database records which numbers it has run, so inserting one in the
-     middle silently skips it on machines that are already past that
-     number. New migrations go at the bottom, always. */
-  `ALTER TABLE seeded_assets ADD COLUMN sha TEXT NOT NULL DEFAULT '';`,
 ];
+/* Numbered migrations are keyed by their position, and a deploy that crashes
+   part-way still records the ones that finished. That makes the ledger an
+   unreliable witness for anything added after the first release. So schema
+   added later is repaired by LOOKING at the database instead of trusting the
+   ledger: every step below is safe to run on every boot, forever. */
+function ensureSchema() {
+  db.exec(`CREATE TABLE IF NOT EXISTS seeded_assets (
+             filename  TEXT PRIMARY KEY,
+             seeded_at TEXT NOT NULL
+           )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS code_history (
+             code       TEXT PRIMARY KEY COLLATE NOCASE,
+             user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+             retired_at TEXT NOT NULL
+           )`);
+  addColumn('seeded_assets', 'sha', "TEXT NOT NULL DEFAULT ''");
+}
+
+function addColumn(table, column, definition) {
+  const has = db.prepare('PRAGMA table_info(' + table + ')').all().some(c => c.name === column);
+  if (!has) db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + definition);
+}
+
 function migrate() {
   db.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
   const done = new Set(db.prepare('SELECT n FROM _migrations').all().map(r => r.n));
@@ -148,6 +153,7 @@ function migrate() {
     db.exec(MIGRATIONS[i]);
     db.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?, ?)').run(i, new Date().toISOString());
   }
+  ensureSchema();
 }
 
 /* ------------------------------------------------------------- utilities */
@@ -278,4 +284,4 @@ function seedAssets(newId) {
   }
 }
 
-module.exports = { open, handle, q, tx, migrate, MIGRATIONS, getSettings, setSetting, seedServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };
+module.exports = { open, handle, q, tx, migrate, ensureSchema, MIGRATIONS, getSettings, setSetting, seedServices, seedAssets, SETTING_DEFAULTS, DATA_DIR };

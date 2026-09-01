@@ -329,50 +329,81 @@ function multipart(fields, files) {
 
   /* ------------------------------------------- the code goes on the image */
   /* --------------------------------------------- upgrading a live database */
-  section('Upgrading the database that is already in production');
+  section('Upgrading whatever shape the live database is in');
   {
     const crypto2 = require('node:crypto');
-    const MIG = require('../src/db').MIGRATIONS;
+    const DBM = require('../src/db');
+    const MIG = DBM.MIGRATIONS;
     const SHIPPED = require('./shipped-migrations.json');
-
-    // A migration's index IS its identity: every database records the numbers
-    // it has run. Change or reorder one that already shipped and machines past
-    // that number skip it forever. This is the guard against doing that again.
-    ok('migrations that already ran in production are untouched',
-       SHIPPED.every((h, i) => MIG[i] &&
-         crypto2.createHash('sha256').update(MIG[i]).digest('hex').slice(0, 16) === h),
-       'index ' + SHIPPED.findIndex((h, i) => !MIG[i] ||
-         crypto2.createHash('sha256').update(MIG[i]).digest('hex').slice(0, 16) !== h));
-    ok('new migrations are appended, never inserted', MIG.length >= SHIPPED.length);
-
-    // Rebuild production exactly: every shipped migration recorded as run, and
-    // seeded_assets present from the release that created it outside the list.
     const { DatabaseSync } = require('node:sqlite');
-    const prod = new DatabaseSync(':memory:');
-    prod.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
-    for (let i = 0; i < SHIPPED.length; i++) {
-      prod.exec(MIG[i]);
-      prod.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+
+    ok('the first release\u2019s migrations are never edited',
+       SHIPPED.length === MIG.length && SHIPPED.every((h, i) =>
+         crypto2.createHash('sha256').update(MIG[i]).digest('hex').slice(0, 16) === h));
+
+    /* A deploy that crashes half way still records the migrations that ran, so
+       the ledger can hold numbers that mean nothing in this release. Rather
+       than guess which, prove the upgrade survives EVERY shape it could be in:
+       any ledger length, table there or missing, column there or missing. */
+    const shapes = [];
+    for (const ledger of [MIG.length, MIG.length + 1, MIG.length + 2, MIG.length + 3]) {
+      for (const seeded of ['missing', 'no-sha', 'with-sha']) {
+        for (const history of [true, false]) shapes.push({ ledger, seeded, history });
+      }
     }
 
-    let upgradeError = null;
-    try {
-      const done = new Set(prod.prepare('SELECT n FROM _migrations').all().map(r => r.n));
-      for (let i = 0; i < MIG.length; i++) {
-        if (done.has(i)) continue;
-        prod.exec(MIG[i]);
-        prod.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+    let broken = null;
+    for (const shape of shapes) {
+      const d = new DatabaseSync(':memory:');
+      d.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+      for (let i = 0; i < MIG.length; i++) d.exec(MIG[i]);
+      for (let i = 0; i < shape.ledger; i++) {
+        d.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
       }
-    } catch (e) { upgradeError = e; }
-    ok('the live database upgrades without error', upgradeError === null,
-       upgradeError && upgradeError.message);
+      if (shape.seeded !== 'missing') {
+        d.exec('CREATE TABLE seeded_assets (filename TEXT PRIMARY KEY, seeded_at TEXT NOT NULL' +
+               (shape.seeded === 'with-sha' ? ", sha TEXT NOT NULL DEFAULT ''" : '') + ')');
+      }
+      if (shape.history) {
+        d.exec('CREATE TABLE code_history (code TEXT PRIMARY KEY COLLATE NOCASE, user_id TEXT NOT NULL, retired_at TEXT NOT NULL)');
+      }
+      d.close();
 
-    const cols = prod.prepare('PRAGMA table_info(seeded_assets)').all().map(c => c.name);
-    ok('every column this release reads actually exists after the upgrade',
-       cols.includes('filename') && cols.includes('seeded_at') && cols.includes('sha'), cols.join(','));
-    ok('and the table this release needs is there too',
-       !!prod.prepare("SELECT name FROM sqlite_master WHERE name='code_history'").get());
-    prod.close();
+      // now boot the real thing against it
+      const file = require('node:path').join(require('node:os').tmpdir(),
+        'shape-' + Math.random().toString(36).slice(2) + '.db');
+      try {
+        const src = new DatabaseSync(':memory:');   // rebuild on disk for the real open()
+        src.close();
+        const disk = new DatabaseSync(file);
+        disk.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+        for (let i = 0; i < MIG.length; i++) disk.exec(MIG[i]);
+        for (let i = 0; i < shape.ledger; i++) {
+          disk.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+        }
+        if (shape.seeded !== 'missing') {
+          disk.exec('CREATE TABLE seeded_assets (filename TEXT PRIMARY KEY, seeded_at TEXT NOT NULL' +
+                    (shape.seeded === 'with-sha' ? ", sha TEXT NOT NULL DEFAULT ''" : '') + ')');
+        }
+        if (shape.history) {
+          disk.exec('CREATE TABLE code_history (code TEXT PRIMARY KEY COLLATE NOCASE, user_id TEXT NOT NULL, retired_at TEXT NOT NULL)');
+        }
+        disk.close();
+
+        const child = require('node:child_process').spawnSync(process.execPath,
+          ['-e', "const D=require('" + require('node:path').resolve('src/db.js').replace(/\\/g, '/') +
+                 "');const A=require('" + require('node:path').resolve('src/auth.js').replace(/\\/g, '/') +
+                 "');D.open(process.argv[1]);D.seedServices(A.newId);D.seedAssets(A.newId);" +
+                 "if(!D.q.get(\"SELECT name FROM sqlite_master WHERE name='code_history'\"))throw new Error('no code_history');" +
+                 "D.q.get('SELECT sha FROM seeded_assets LIMIT 1');", file],
+          { encoding: 'utf8' });
+        if (child.status !== 0) broken = { shape, err: (child.stderr || '').split('\n').find(l => /Error/.test(l)) };
+      } catch (e) { broken = { shape, err: e.message }; }
+      try { require('node:fs').unlinkSync(file); } catch (e) {}
+      if (broken) break;
+    }
+    ok('every shape the live database could be in boots and repairs itself',
+       broken === null, broken && JSON.stringify(broken.shape) + ' → ' + broken.err);
   }
 
   /* ------------------------------------ a redesigned graphic replaces itself */
