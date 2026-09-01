@@ -128,13 +128,17 @@ const MIGRATIONS = [
      seeded_at TEXT NOT NULL
    );`,
 
-  `ALTER TABLE seeded_assets ADD COLUMN sha TEXT NOT NULL DEFAULT '';`,
-
   `CREATE TABLE IF NOT EXISTS code_history (
      code       TEXT PRIMARY KEY COLLATE NOCASE,
      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
      retired_at TEXT NOT NULL
    );`,
+
+  /* Append-only from here. A migration's INDEX is its identity — every
+     database records which numbers it has run, so inserting one in the
+     middle silently skips it on machines that are already past that
+     number. New migrations go at the bottom, always. */
+  `ALTER TABLE seeded_assets ADD COLUMN sha TEXT NOT NULL DEFAULT '';`,
 ];
 function migrate() {
   db.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');

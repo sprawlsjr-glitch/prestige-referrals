@@ -329,37 +329,50 @@ function multipart(fields, files) {
 
   /* ------------------------------------------- the code goes on the image */
   /* --------------------------------------------- upgrading a live database */
-  section('Upgrading a database from the previous release');
+  section('Upgrading the database that is already in production');
   {
-    // Exactly what production looked like before this release: seeded_assets
-    // was created outside the migration list, so the row that records it is
-    // missing. Re-running migrations must not blow up on it.
-    const { DatabaseSync } = require('node:sqlite');
-    const older = new DatabaseSync(':memory:');
+    const crypto2 = require('node:crypto');
     const MIG = require('../src/db').MIGRATIONS;
-    older.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
-    for (let i = 0; i < MIG.length; i++) {
-      if (/seeded_assets|code_history/.test(MIG[i])) continue;   // the new ones
-      older.exec(MIG[i]);
-      older.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+    const SHIPPED = require('./shipped-migrations.json');
+
+    // A migration's index IS its identity: every database records the numbers
+    // it has run. Change or reorder one that already shipped and machines past
+    // that number skip it forever. This is the guard against doing that again.
+    ok('migrations that already ran in production are untouched',
+       SHIPPED.every((h, i) => MIG[i] &&
+         crypto2.createHash('sha256').update(MIG[i]).digest('hex').slice(0, 16) === h),
+       'index ' + SHIPPED.findIndex((h, i) => !MIG[i] ||
+         crypto2.createHash('sha256').update(MIG[i]).digest('hex').slice(0, 16) !== h));
+    ok('new migrations are appended, never inserted', MIG.length >= SHIPPED.length);
+
+    // Rebuild production exactly: every shipped migration recorded as run, and
+    // seeded_assets present from the release that created it outside the list.
+    const { DatabaseSync } = require('node:sqlite');
+    const prod = new DatabaseSync(':memory:');
+    prod.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+    for (let i = 0; i < SHIPPED.length; i++) {
+      prod.exec(MIG[i]);
+      prod.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
     }
-    older.exec('CREATE TABLE seeded_assets (filename TEXT PRIMARY KEY, seeded_at TEXT NOT NULL)');
 
     let upgradeError = null;
     try {
-      const done = new Set(older.prepare('SELECT n FROM _migrations').all().map(r => r.n));
+      const done = new Set(prod.prepare('SELECT n FROM _migrations').all().map(r => r.n));
       for (let i = 0; i < MIG.length; i++) {
         if (done.has(i)) continue;
-        older.exec(MIG[i]);
-        older.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
+        prod.exec(MIG[i]);
+        prod.prepare('INSERT INTO _migrations (n, applied_at) VALUES (?,?)').run(i, new Date().toISOString());
       }
     } catch (e) { upgradeError = e; }
+    ok('the live database upgrades without error', upgradeError === null,
+       upgradeError && upgradeError.message);
 
-    ok('a database carrying seeded_assets from the old release still upgrades',
-       upgradeError === null, upgradeError && upgradeError.message);
-    ok('the upgrade adds the table the new release needs',
-       !!older.prepare("SELECT name FROM sqlite_master WHERE name='code_history'").get());
-    older.close();
+    const cols = prod.prepare('PRAGMA table_info(seeded_assets)').all().map(c => c.name);
+    ok('every column this release reads actually exists after the upgrade',
+       cols.includes('filename') && cols.includes('seeded_at') && cols.includes('sha'), cols.join(','));
+    ok('and the table this release needs is there too',
+       !!prod.prepare("SELECT name FROM sqlite_master WHERE name='code_history'").get());
+    prod.close();
   }
 
   /* ------------------------------------ a redesigned graphic replaces itself */
